@@ -1,0 +1,18 @@
+# secrets
+.env
+
+# python
+venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+
+# macOS
+.DS_Store
+
+# dataset (license forbids redistribution; too large for GitHub)
+data/
+
+# training outputs (checkpoints are large)
+runs/
+*.pt
