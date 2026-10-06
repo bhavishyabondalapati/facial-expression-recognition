@@ -85,7 +85,7 @@ def build_dataset(fer: pd.DataFrame, ferplus: pd.DataFrame, seed: int) -> dict:
         "hard": hard_labels(votes, seed),
         "is_tie": (votes == votes.max(axis=1, keepdims=True)).sum(axis=1) > 1,
         "entropy": entropy(soft),
-        "split": ferplus.loc[keep, "Usage"].map(split_name).values.astype("U5"),
+        "split": np.asarray(ferplus.loc[keep, "Usage"].map(split_name).tolist(), dtype="U5"),
         "row": np.flatnonzero(keep),   # row in the original CSVs
     }
 
