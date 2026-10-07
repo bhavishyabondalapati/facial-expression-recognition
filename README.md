@@ -35,6 +35,8 @@ facial-expression-recognition/
 │   ├── metrics.json              # the same numbers, machine-readable
 │   └── figures/                  # exploration and result charts
 ├── runs/                         # not committed: checkpoints + training history
+├── weights/
+│   └── cnn_soft.pt               # trained soft-label CNN (19 MB), so the demo runs right after cloning
 ├── src/
 │   ├── config.py                 # paths, class names, constants
 │   ├── data.py                   # alignment check, hard/soft label building, loading
@@ -68,6 +70,14 @@ facial-expression-recognition/
    - `fer2013new.csv` from https://github.com/microsoft/FERPlus
 
 ## How to run
+
+**Just the webcam demo:** once the environment from Setup step 1 is ready, no dataset or training is needed,
+because the trained soft-label CNN ships in `weights/`:
+```bash
+python -m src.webcam
+```
+
+**The full pipeline** (needs the dataset from Setup step 2):
 
 ```bash
 python -m src.prepare_data      # verify the CSVs line up, build data/processed/ferplus.npz
@@ -187,8 +197,8 @@ contempt numbers as rough. Class weighting or oversampling would be the next thi
 ## Webcam demo
 
 ```bash
-python -m src.webcam                         # default: soft-label scratch CNN
-python -m src.webcam --model resnet18_soft   # any run folder in runs/
+python -m src.webcam                         # default: soft-label scratch CNN (shipped in weights/)
+python -m src.webcam --model resnet18_soft   # needs your own training run in runs/
 python -m src.webcam --image photo.jpg       # annotate a photo instead
 ```
 
@@ -226,6 +236,28 @@ and contempt. If those matter to you, run `--model resnet18_soft`.
 **Caveat (domain shift):** FER2013 faces come from web images, are tightly cropped, and are often
 posed. A webcam has different lighting, angles and crops, so live predictions will be less reliable
 than the test-set numbers. Use `--margin 0.1` to loosen the crop if predictions look off.
+
+## Future improvements
+
+In live use, happiness, surprise and sadness work well, but **anger and especially contempt drift
+toward neutral**. That matches the test set: the soft CNN calls 44% of contempt faces neutral.
+Neutral is 35% of the training data, so it's the model's default when unsure. Two fixes we
+measured or considered but didn't build:
+
+1. **A `--balance` option (no retraining).** Divide each predicted probability by that class's
+   share of the training labels (raised to a power τ), then renormalize. This is called a
+   *prior correction* or *logit adjustment*. On the test set with τ = 0.5, the soft CNN gets more
+   faces right for anger (80% → 85%), contempt (15% → 26%), disgust (30% → 56%) and fear
+   (47% → 62%). Overall accuracy drops (82.9% → 81.4%) and neutral drops (90% → 81%). With τ = 1,
+   it overcorrects (accuracy 72.7%). The downside: the bars would no longer match how people vote,
+   which is the point of the soft-label model, so this would be an opt-in switch.
+2. **Retrain with class weights or oversampling,** so rare emotions count more in the loss.
+   This would likely help contempt and disgust most. It costs about 10–17 minutes per model, plus
+   re-running the evaluation, and it adds a new experiment variable.
+
+Other ideas: train with several seeds to put error bars on training randomness; use a stronger
+face detector (e.g. OpenCV's YuNet) for tilted faces; fine-tune on a few labeled webcam
+frames to reduce domain shift.
 
 ## Key concepts
 
