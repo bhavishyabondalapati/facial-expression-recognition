@@ -18,7 +18,7 @@ import cv2
 import numpy as np
 import torch
 
-from src.config import CLASSES, IMG_SIZE, RUNS_DIR
+from src.config import CLASSES, IMG_SIZE, RUNS_DIR, WEIGHTS_DIR
 from src.models import build_model
 from src.train import get_device
 
@@ -30,8 +30,18 @@ BOX = (214, 120, 42)            # blue face box
 UNCERTAIN_BELOW = 0.5           # top probability under this -> show the top two
 
 
+def find_checkpoint(run):
+    """Your own training run if it exists, else the weights shipped with the repo."""
+    for path in [RUNS_DIR / run / "final.pt", WEIGHTS_DIR / f"{run}.pt"]:
+        if path.exists():
+            return path
+    raise SystemExit(f"No weights for '{run}'. Train it with: python -m src.train "
+                     f"--model {run.split('_')[0]} --labels {run.split('_')[-1]}")
+
+
 def load_model(run, device):
-    ckpt = torch.load(RUNS_DIR / run / "final.pt", map_location="cpu", weights_only=False)
+    # weights_only=True: load tensors only, never run code stored in the file
+    ckpt = torch.load(find_checkpoint(run), map_location="cpu", weights_only=True)
     model = build_model(ckpt["model"], pretrained=False)
     model.load_state_dict(ckpt["state_dict"])
     return model.to(device).eval()

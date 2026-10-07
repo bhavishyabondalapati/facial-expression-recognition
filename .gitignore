@@ -16,6 +16,7 @@ data/
 # training outputs (checkpoints are large)
 runs/
 *.pt
+!weights/cnn_soft.pt
 
 # sample dataset faces (FER2013 license: don't redistribute images)
 results/figures/examples_clear_vs_ambiguous.png

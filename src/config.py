@@ -9,6 +9,7 @@ FERPLUS_CSV = RAW_DIR / "fer2013new.csv"
 PROCESSED_NPZ = PROCESSED_DIR / "ferplus.npz"
 FIGURES_DIR = ROOT / "results" / "figures"
 RUNS_DIR = ROOT / "runs"
+WEIGHTS_DIR = ROOT / "weights"   # committed weights so the demo works right after cloning
 
 # The 8 FER+ emotion classes, in the column order of fer2013new.csv.
 CLASSES = ["neutral", "happiness", "surprise", "sadness",

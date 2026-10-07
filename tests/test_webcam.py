@@ -33,3 +33,19 @@ def test_describe_flags_uncertain_predictions():
     unsure = np.array([0.40, 0.05, 0.05, 0.35, 0.05, 0.05, 0.05, 0])
     assert describe(confident) == f"{CLASSES[1]} 85%"
     assert describe(unsure).startswith("uncertain: neutral 40% / sadness 35%")
+
+
+def test_shipped_weights_load_and_predict():
+    """The committed soft CNN must load without the dataset or a training run."""
+    import torch
+    from src.config import WEIGHTS_DIR
+    from src.webcam import load_model
+
+    if not (WEIGHTS_DIR / "cnn_soft.pt").exists():
+        pytest.skip("weights/cnn_soft.pt not present")
+    ckpt = torch.load(WEIGHTS_DIR / "cnn_soft.pt", map_location="cpu", weights_only=True)
+    assert ckpt["model"] == "cnn" and ckpt["labels"] == "soft"
+    model = load_model("cnn_soft", torch.device("cpu"))
+    with torch.no_grad():
+        probs = torch.softmax(model(torch.rand(1, 1, 48, 48)), dim=1)
+    assert probs.shape == (1, len(CLASSES)) and float(probs.sum()) == pytest.approx(1.0, abs=1e-5)
