@@ -7,8 +7,8 @@ to see which one handles ambiguous faces better. It uses a small CNN trained fro
 scratch and an ImageNet-pretrained ResNet18, keeps all 8 emotion classes, trains on
 Apple Silicon (`mps`), and will end with a real-time webcam demo.
 
-> **Status:** data pipeline, exploration and training code are done.
-> Training runs, evaluation and the webcam demo are next.
+> **Status:** data, training and evaluation are done (see [Results](#results)).
+> The webcam demo is next.
 
 ## Tools and libraries
 
@@ -31,7 +31,9 @@ facial-expression-recognition/
 │   └── processed/ferplus.npz     # images + hard/soft labels, built by prepare_data
 ├── results/
 │   ├── data_summary.md           # class counts, ambiguity stats, contempt, duplicates
-│   └── figures/                  # exploration charts (see below)
+│   ├── results.md                # all test-set tables (full and without duplicates)
+│   ├── metrics.json              # the same numbers, machine-readable
+│   └── figures/                  # exploration and result charts
 ├── runs/                         # not committed: checkpoints + training history
 ├── src/
 │   ├── config.py                 # paths, class names, constants
@@ -39,10 +41,13 @@ facial-expression-recognition/
 │   ├── prepare_data.py           # script: verify CSVs, save ferplus.npz
 │   ├── explore.py                # script: exploration figures + data_summary.md
 │   ├── models.py                 # scratch CNN and ResNet18 (both take 48x48 grayscale)
-│   └── train.py                  # script: train one model on hard or soft labels
+│   ├── train.py                  # script: train one model on hard or soft labels
+│   ├── evaluate.py               # script: test-set metrics for all 4 models
+│   └── report.py                 # writes results.md and the result figures
 ├── tests/
 │   ├── test_data.py              # label building, tie-breaks, row dropping, alignment
-│   └── test_models.py            # output shapes, loss correctness, augmentation
+│   ├── test_models.py            # output shapes, loss correctness, augmentation
+│   └── test_evaluate.py          # KL, calibration error, tie-aware accuracy, buckets
 ├── requirements.txt
 └── README.md
 ```
@@ -65,7 +70,8 @@ facial-expression-recognition/
 ```bash
 python -m src.prepare_data      # verify the CSVs line up, build data/processed/ferplus.npz
 python -m src.explore           # figures + results/data_summary.md
-python -m src.train --model cnn --labels hard      # one of 4 training runs
+python -m src.train --model cnn --labels hard      # one of 4 training runs (~10-17 min each)
+python -m src.evaluate          # test-set results -> results/results.md + figures
 python -m pytest                # run the tests
 ```
 
@@ -86,7 +92,10 @@ The four runs are every combination of `--model {cnn,resnet18}` and `--labels {h
 4. **Wrote the training code.** Hard and soft runs share images, image order,
    augmentation, learning-rate schedule and loss. A hard label is a one-hot
    distribution, so one loss function handles both.
-5. *Next:* train the 4 models, evaluate on clear vs ambiguous faces, build the webcam demo.
+5. **Trained 4 models** (30 epochs each on `mps`): scratch CNN and ResNet18, each with hard and soft labels.
+6. **Evaluated on the test set**, both in full and with train duplicates removed: accuracy,
+   F1, KL to human votes, calibration, results by ambiguity, and bootstrap intervals.
+7. *Next:* real-time webcam demo.
 
 ### What the data looks like
 
@@ -110,6 +119,67 @@ The four runs are every combination of `--model {cnn,resnet18}` and `--labels {h
 - **Reused filenames in `fer2013new.csv`:** 4 image names appear twice, and 2 of those
   pairs are different faces. This doesn't affect us, because we match by row, not by name.
 
+## Results
+
+Full tables: [results/results.md](results/results.md). Test set = FER+ PrivateTest.
+
+| model | Acc (majority) | Macro F1 | KL to votes ↓ | Avg confidence |
+|---|---:|---:|---:|---:|
+| CNN · hard | 82.5% | 0.682 | 0.707 | 88% |
+| CNN · soft | 82.9% | 0.653 | **0.288** | 74% |
+| ResNet18 · hard | 82.8% | 0.698 | 1.469 | 95% |
+| ResNet18 · soft | 82.5% | 0.695 | **0.327** | 75% |
+
+Without the 288 test images duplicated in train (n = 3,285), every model loses about 0.4–1.3 accuracy
+points, and macro F1 drops by 0.02–0.05, mostly because disgust and contempt get harder. The
+hard-vs-soft conclusions below stay the same.
+
+![results by ambiguity](results/figures/results_by_ambiguity.png)
+
+**What we found**
+
+1. **Accuracy: no difference.** Soft − hard accuracy is between −1% and +1.7%, and every 95%
+   bootstrap interval includes 0. That holds for both models and both test sets.
+2. **Matching human judgment: soft labels win clearly.** KL to the vote distribution drops by
+   59% for the CNN and 78% for ResNet18. The intervals are far from 0. The gap grows with
+   ambiguity: on faces where ≤5/10 annotators agreed, hard-label ResNet18 has a KL of 3.11, versus 0.56 for soft.
+3. **Hard labels make models overconfident on ambiguous faces.** When only 48% of humans agree,
+   hard-label ResNet18 is still 90% confident on average. The soft-label model is 58% confident.
+4. **Soft labels make the model somewhat *under*confident when judged against the majority
+   label** (see the calibration chart). It learned to hedge like the crowd does, but the
+   majority answer is correct more often than any individual annotator. So the soft model's
+   ECE isn't always better than the hard model's (CNN: 0.088 soft vs 0.059 hard).
+
+So which handles ambiguous faces better? **The soft-label model.** It is just as accurate, and its
+probabilities reflect real disagreement instead of false certainty. This matters if the output is
+used as a confidence (for example, in the webcam demo), not just as a top-1 label.
+
+![calibration](results/figures/results_calibration.png)
+
+### The contempt problem
+
+![per-class F1](results/figures/results_per_class_f1.png)
+
+Contempt is the weakest class for every model: F1 ranges from 0.24 to 0.46, and the best model gets
+13 of the 34 test images right. The usual mistake is predicting **neutral** (see
+[the confusion matrices](results/figures/results_confusion.png)), which makes sense: contempt is a
+subtle, one-sided expression. There are three reasons:
+- **Very little data:** only 200 majority-contempt training images (0.7%).
+- **Humans disagree too:** annotators agree with the majority only 56% of the time on contempt faces.
+- **Too few test images to measure:** with 34 examples, one more or fewer correct changes recall by 3 points.
+
+Soft labels *lowered* contempt F1 here (0.39 → 0.24 for CNN, 0.46 → 0.39 for ResNet18). A soft
+target never pushes a contempt face all the way to "contempt". It gives partial credit to the
+neutral votes that usually come with it. That is our likely explanation (not tested): it would make the model rarely choose contempt as its top pick. Treat
+contempt numbers as rough. Class weighting or oversampling would be the next thing to try.
+
+### Limitations
+
+- **One training run per model (seed 42).** The bootstrap intervals cover test-set sampling, not
+  training randomness. Small differences (e.g. per-class F1 for rare classes) could flip with another seed.
+- **The final epoch was used, with no tuning.** Both label types use the same hyperparameters, chosen
+  in advance. Neither is tuned to its best.
+
 ## Key concepts
 
 - **Hard vs soft labels:** a hard label says "this face is happy". A soft label says
@@ -131,4 +201,9 @@ The four runs are every combination of `--model {cnn,resnet18}` and `--labels {h
   about 10,000 for neutral. Overall accuracy hides how badly rare classes do, so we
   report per-class F1 too.
 - **Data leakage:** duplicate images across train and test can make test scores look
-  better than real-world performance.
+  better than real-world performance. Here, removing them cost about 1 accuracy point and more on rare classes.
+- **Calibration / ECE:** a model is calibrated if, among predictions made with 80% confidence,
+  about 80% are right. Hard-label training pushes confidence toward 100% even on ambiguous inputs.
+- **Bootstrap confidence interval:** resample the test set with replacement thousands of times and
+  recompute the difference each time. The middle 95% of those differences is the interval.
+  "Paired" means both models are scored on the same resampled images.
