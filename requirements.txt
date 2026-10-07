@@ -4,6 +4,5 @@ numpy
 pandas
 matplotlib
 scikit-learn
-opencv-python
-tqdm
+opencv-python>=4.10,<5   # 5.x dropped the bundled Haar face detector
 pytest
