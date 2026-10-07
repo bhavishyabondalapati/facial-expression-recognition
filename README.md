@@ -5,10 +5,10 @@ compares a model trained on the **majority vote** (one "correct" emotion per fac
 against one trained on the **full vote distribution** (e.g. 60% happy, 40% surprise),
 to see which one handles ambiguous faces better. It uses a small CNN trained from
 scratch and an ImageNet-pretrained ResNet18, keeps all 8 emotion classes, trains on
-Apple Silicon (`mps`), and will end with a real-time webcam demo.
+Apple Silicon (`mps`), and ends with a real-time webcam demo.
 
-> **Status:** data, training and evaluation are done (see [Results](#results)).
-> The webcam demo is next.
+> **Status:** complete: data, training, evaluation ([Results](#results)) and the
+> [webcam demo](#webcam-demo).
 
 ## Tools and libraries
 
@@ -18,7 +18,7 @@ Apple Silicon (`mps`), and will end with a real-time webcam demo.
 | **pandas / NumPy** | Reading the CSVs and building label arrays |
 | **matplotlib** | Exploration and result charts |
 | **scikit-learn** | Evaluation metrics (confusion matrix, per-class F1) |
-| **OpenCV** | Face detection and camera capture for the webcam demo |
+| **OpenCV** (4.x) | Face detection and camera capture for the webcam demo. Pinned below 5.0, because 5.x no longer ships the Haar face detector |
 | **pytest** | Tests for the label logic, models and loss |
 
 ## File structure
@@ -43,11 +43,13 @@ facial-expression-recognition/
 │   ├── models.py                 # scratch CNN and ResNet18 (both take 48x48 grayscale)
 │   ├── train.py                  # script: train one model on hard or soft labels
 │   ├── evaluate.py               # script: test-set metrics for all 4 models
-│   └── report.py                 # writes results.md and the result figures
+│   ├── report.py                 # writes results.md and the result figures
+│   └── webcam.py                 # script: real-time demo (or --image for a photo)
 ├── tests/
 │   ├── test_data.py              # label building, tie-breaks, row dropping, alignment
 │   ├── test_models.py            # output shapes, loss correctness, augmentation
-│   └── test_evaluate.py          # KL, calibration error, tie-aware accuracy, buckets
+│   ├── test_evaluate.py          # KL, calibration error, tie-aware accuracy, buckets
+│   └── test_webcam.py            # face preprocessing, smoothing, uncertain labels
 ├── requirements.txt
 └── README.md
 ```
@@ -72,6 +74,7 @@ python -m src.prepare_data      # verify the CSVs line up, build data/processed/
 python -m src.explore           # figures + results/data_summary.md
 python -m src.train --model cnn --labels hard      # one of 4 training runs (~10-17 min each)
 python -m src.evaluate          # test-set results -> results/results.md + figures
+python -m src.webcam            # live demo (press q to quit)
 python -m pytest                # run the tests
 ```
 
@@ -95,7 +98,8 @@ The four runs are every combination of `--model {cnn,resnet18}` and `--labels {h
 5. **Trained 4 models** (30 epochs each on `mps`): scratch CNN and ResNet18, each with hard and soft labels.
 6. **Evaluated on the test set**, both in full and with train duplicates removed: accuracy,
    F1, KL to human votes, calibration, results by ambiguity, and bootstrap intervals.
-7. *Next:* real-time webcam demo.
+7. **Chose a model for the demo** by comparing the two soft-label models on both test sets and on speed.
+8. **Built the webcam demo:** face detection → 48×48 crop → model → smoothed probability bars.
 
 ### What the data looks like
 
@@ -180,6 +184,49 @@ contempt numbers as rough. Class weighting or oversampling would be the next thi
 - **The final epoch was used, with no tuning.** Both label types use the same hyperparameters, chosen
   in advance. Neither is tuned to its best.
 
+## Webcam demo
+
+```bash
+python -m src.webcam                         # default: soft-label scratch CNN
+python -m src.webcam --model resnet18_soft   # any run folder in runs/
+python -m src.webcam --image photo.jpg       # annotate a photo instead
+```
+
+The first time, macOS asks for camera access for your terminal app. If you deny it, enable it
+under System Settings → Privacy & Security → Camera, then restart the terminal.
+
+**How it works:** each frame is mirrored and converted to grayscale. OpenCV's Haar detector
+finds faces, and each face is cropped and resized to 48×48 like FER2013. The model outputs 8
+probabilities, which are smoothed over frames (moving average) so the bars don't flicker. If the
+top probability is under 50%, the label shows the top two (e.g. `uncertain: neutral 41% / sadness 33%`).
+The bars show the largest face. Every detected face gets its own label.
+
+### Which model, and why
+
+The demo shows a probability for every emotion, so we want probabilities that match
+how people actually vote. Accuracy alone isn't enough. Comparing the two soft-label models
+(95% paired bootstrap interval for CNN − ResNet18 in brackets):
+
+| | Soft CNN | Soft ResNet18 | Real difference? |
+|---|---:|---:|---|
+| Accuracy, full test | **82.9%** | 82.5% | no: [−0.7%, +1.5%] |
+| Accuracy, without duplicates | **82.5%** | 81.6% | no: [−0.2%, +2.1%] |
+| KL to votes, full / without duplicates | **0.288 / 0.296** | 0.327 / 0.349 | **yes, CNN better** on both |
+| Macro F1, full / without duplicates | 0.653 / 0.629 | **0.695 / 0.661** | ResNet better on full; borderline without duplicates |
+| Contempt / disgust F1 (full) | 0.24 / 0.33 | **0.39 / 0.57** | |
+| Time per face on `mps` | **1.2 ms** | 2.4 ms | |
+| Parameters | **4.7M** | 11.2M | |
+
+**Default: soft-label CNN.** Its probabilities are measurably closer to human votes. Its accuracy
+is tied with ResNet18 (slightly ahead, but not significantly). It is 2× faster and less than half
+the size. Both models are far faster than a 30 fps frame (33 ms), so speed is a bonus, not
+the deciding factor. **Trade-off:** the CNN is clearly worse on the rare classes, especially disgust
+and contempt. If those matter to you, run `--model resnet18_soft`.
+
+**Caveat (domain shift):** FER2013 faces come from web images, are tightly cropped, and are often
+posed. A webcam has different lighting, angles and crops, so live predictions will be less reliable
+than the test-set numbers. Use `--margin 0.1` to loosen the crop if predictions look off.
+
 ## Key concepts
 
 - **Hard vs soft labels:** a hard label says "this face is happy". A soft label says
@@ -207,3 +254,12 @@ contempt numbers as rough. Class weighting or oversampling would be the next thi
 - **Bootstrap confidence interval:** resample the test set with replacement thousands of times and
   recompute the difference each time. The middle 95% of those differences is the interval.
   "Paired" means both models are scored on the same resampled images.
+- **Choosing a model for a use case:** the "best" model depends on what the output is used for.
+  For confidence bars, distribution match (KL) matters more than top-1 accuracy. For spotting
+  rare expressions, macro F1 matters more.
+- **Haar cascade face detection:** a fast, classic (pre-deep-learning) detector that slides
+  simple light/dark patterns over the image. It's quick on a CPU, but it misses tilted or partly hidden faces.
+- **Smoothing with a moving average:** new = α·current + (1−α)·previous. This trades a little
+  lag for stable, readable bars.
+- **Domain shift:** a model trained on one kind of image (web photos) can perform worse on
+  another (your webcam), even when the task is the same.
